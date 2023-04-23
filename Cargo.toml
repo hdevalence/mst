@@ -1,0 +1,13 @@
+[package]
+name = "mst"
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "An implementation of ATProto's Merkle Search Tree"
+homepage = "https://github.com/hdevalence/mst"
+repository = "https://github.com/hdevalence/mst"
+readme = "README.md"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
