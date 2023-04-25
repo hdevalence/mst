@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, io};
 
 use cid::Cid;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer as _, Serialize};
 
 // go NodeEntry
 pub enum Node {
@@ -27,6 +27,15 @@ struct TreeEntry {
     val: Cid,
     tree: Option<Cid>,
 }
+
+impl NodeData {
+    fn read_cbor<R: io::Read>(reader: R) -> io::Result<Self> {
+        // todo
+        todo!()
+    }
+}
+
+impl TreeEntry {}
 
 // not sure this is actually any better than manually invoking serializer/deserializer methods ... it may be much worse
 mod helper {
@@ -124,6 +133,23 @@ mod helper {
         fn deserialize_test_vector() {
             let hex_simple_nd = "a2616581a4616b5820636f6d2e6578616d706c652e7265636f72642f336a716663717a6d33666f326a6170006174f66176d82a582500017112209d156bc3f3a520066252c708a9361fd3d089223842500e3713d404fdccb33cef616cf6";
             let simple_nd_bytes = hex::decode(&hex_simple_nd).unwrap();
+
+            let tokens = minicbor::decode::Tokenizer::new(&simple_nd_bytes)
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            println!("{:?}", tokens);
+
+            let ciborium_value: ciborium::value::Value =
+                ciborium::de::from_reader(&simple_nd_bytes[..]).unwrap();
+            println!("ciborium {:#?}", ciborium_value);
+
+            let simple_nd_value =
+                serde_cbor::from_slice::<serde_cbor::Value>(&simple_nd_bytes).unwrap();
+            println!("{:?}", simple_nd_value);
+            let simple_nd_bytes_2 = serde_cbor::to_vec(&simple_nd_value).unwrap();
+            let hex_simple_nd_2 = hex::encode(&simple_nd_bytes_2);
+            println!("{}", hex_simple_nd_2);
+            assert_eq!(simple_nd_bytes, simple_nd_bytes_2);
 
             let simple_nd_cbor = serde_cbor::from_slice::<CborNodeData>(&simple_nd_bytes).unwrap();
             let simple_nd = NodeData::try_from(simple_nd_cbor).unwrap();
