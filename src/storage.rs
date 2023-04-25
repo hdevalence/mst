@@ -35,92 +35,156 @@ impl NodeData {
     }
 }
 
-impl TreeEntry {}
+impl TreeEntry {
+    pub fn read<R: io::Read>(reader: &mut R) -> io::Result<Self> {
+        // todo
+        todo!()
+    }
+}
 
-// not sure this is actually any better than manually invoking serializer/deserializer methods ... it may be much worse
-mod helper {
+mod helper2 {
     use super::*;
 
-    use serde_cbor::tags::Tagged;
+    use ciborium::value::Value;
 
-    #[derive(Serialize, Deserialize)]
-    struct CborNodeData {
-        l: Option<Tagged<serde_bytes::ByteBuf>>,
-        e: Vec<CborTreeEntry>,
-    }
-
-    impl From<NodeData> for CborNodeData {
-        fn from(value: NodeData) -> Self {
-            Self {
-                l: value.left.map(cid_to_cbor),
-                e: value.entries.into_iter().map(CborTreeEntry::from).collect(),
-            }
-        }
-    }
-
-    impl TryFrom<CborNodeData> for NodeData {
-        type Error = anyhow::Error;
-        fn try_from(value: CborNodeData) -> Result<Self, Self::Error> {
-            Ok(Self {
-                left: value.l.map(cid_from_cbor).transpose()?,
-                entries: value
-                    .e
-                    .into_iter()
-                    .map(TryFrom::try_from)
-                    .collect::<Result<_, _>>()?,
-            })
-        }
-    }
-
-    #[derive(Serialize, Deserialize)]
-    struct CborTreeEntry {
-        p: i64,
-        k: serde_bytes::ByteBuf,
-        v: Tagged<serde_bytes::ByteBuf>,
-        t: Option<Tagged<serde_bytes::ByteBuf>>,
-    }
-
-    fn cid_to_cbor(cid: Cid) -> Tagged<serde_bytes::ByteBuf> {
-        Tagged::new(
-            Some(42),
-            serde_bytes::ByteBuf::from(
+    fn cid_to_cbor(cid: Cid) -> Value {
+        Value::Tag(
+            42,
+            Box::new(Value::Bytes(
                 std::iter::once(0u8)
                     .chain(cid.to_bytes())
                     .collect::<Vec<u8>>(),
-            ),
+            )),
         )
     }
 
-    fn cid_from_cbor(cid: Tagged<serde_bytes::ByteBuf>) -> anyhow::Result<Cid> {
-        if let Some(42) = cid.tag {
-            Ok(Cid::try_from(&cid.value[1..])?)
-        } else {
-            Err(anyhow::anyhow!(
+    fn cid_from_cbor(cid: Value) -> anyhow::Result<Cid> {
+        match cid {
+            Value::Tag(42, cid) => match *cid {
+                Value::Bytes(cid) => Ok(Cid::try_from(&cid[1..])?),
+                something_else => Err(anyhow::anyhow!(
+                    "expected Value::Bytes for cbor cid, found {:?}",
+                    something_else
+                )),
+            },
+            _ => Err(anyhow::anyhow!(
                 "wrong tag for cbor cid, expected 42, found {:?}",
-                cid.tag
-            ))
+                cid
+            )),
         }
     }
 
-    impl From<TreeEntry> for CborTreeEntry {
-        fn from(e: TreeEntry) -> Self {
-            Self {
-                p: e.prefix_len as i64,
-                k: serde_bytes::ByteBuf::from(e.key_suffix),
-                v: cid_to_cbor(e.val),
-                t: e.tree.map(cid_to_cbor),
-            }
+    impl From<NodeData> for Value {
+        fn from(value: NodeData) -> Self {
+            Value::Map(vec![
+                (
+                    Value::Text("e".to_owned()),
+                    Value::Array(value.entries.into_iter().map(Value::from).collect()),
+                ),
+                (
+                    Value::Text("l".to_owned()),
+                    value.left.map(cid_to_cbor).unwrap_or(Value::Null),
+                ),
+            ])
         }
     }
 
-    impl TryFrom<CborTreeEntry> for TreeEntry {
+    impl TryFrom<Value> for NodeData {
         type Error = anyhow::Error;
-        fn try_from(value: CborTreeEntry) -> Result<Self, Self::Error> {
-            Ok(Self {
-                prefix_len: value.p as usize,
-                key_suffix: value.k.into_vec(),
-                val: cid_from_cbor(value.v)?,
-                tree: value.t.map(cid_from_cbor).transpose()?,
+
+        fn try_from(value: Value) -> Result<Self, Self::Error> {
+            let Value::Map(map) = value else {
+                return Err(anyhow::anyhow!(
+                    "expected Value::Map for cbor node data, found {:?}",
+                    value
+                ));
+            };
+
+            let mut map = map.into_iter();
+
+            let entries = match map.next() {
+                Some((Value::Text(key), Value::Array(entries))) if key == "e" => entries,
+                _ => return Err(anyhow::anyhow!("could not parse cbor node data entries")),
+            };
+
+            let entries = entries
+                .into_iter()
+                .map(TryFrom::try_from)
+                .collect::<Result<Vec<TreeEntry>, _>>()?;
+
+            let left = match map.next() {
+                Some((Value::Text(key), value)) if key == "l" => match value {
+                    Value::Null => None,
+                    value => Some(cid_from_cbor(value)?),
+                },
+                _ => return Err(anyhow::anyhow!("could not parse cbor node data left")),
+            };
+
+            Ok(Self { left, entries })
+        }
+    }
+
+    impl From<TreeEntry> for Value {
+        fn from(value: TreeEntry) -> Self {
+            use ciborium::value::Integer;
+            Value::Map(vec![
+                (Value::Text("k".to_owned()), Value::Bytes(value.key_suffix)),
+                (
+                    Value::Text("p".to_owned()),
+                    Value::Integer(Integer::from(value.prefix_len)),
+                ),
+                (
+                    Value::Text("t".to_owned()),
+                    value.tree.map(cid_to_cbor).unwrap_or(Value::Null),
+                ),
+                (Value::Text("v".to_owned()), cid_to_cbor(value.val)),
+            ])
+        }
+    }
+
+    impl TryFrom<Value> for TreeEntry {
+        type Error = anyhow::Error;
+
+        fn try_from(value: Value) -> Result<Self, Self::Error> {
+            let Value::Map(map) = value else {
+                return Err(anyhow::anyhow!(
+                    "expected Value::Map for cbor tree entry, found {:?}",
+                    value
+                ));
+            };
+
+            let mut map = map.into_iter();
+
+            let key_suffix = match map.next() {
+                Some((Value::Text(key), Value::Bytes(value))) if key == "k" => value,
+                _ => return Err(anyhow::anyhow!("could not parse cbor tree entry key")),
+            };
+
+            let prefix_len = match map.next() {
+                Some((Value::Text(key), Value::Integer(value))) if key == "p" => {
+                    i128::from(value).try_into()?
+                }
+                _ => return Err(anyhow::anyhow!("could not parse cbor tree entry prefix")),
+            };
+
+            let tree = match map.next() {
+                Some((Value::Text(key), value)) if key == "t" => match value {
+                    Value::Null => None,
+                    value => Some(cid_from_cbor(value)?),
+                },
+                _ => return Err(anyhow::anyhow!("could not parse cbor tree entry tree")),
+            };
+
+            let val = match map.next() {
+                Some((Value::Text(key), value)) if key == "v" => cid_from_cbor(value)?,
+                _ => return Err(anyhow::anyhow!("could not parse cbor tree entry value")),
+            };
+
+            Ok(TreeEntry {
+                key_suffix,
+                prefix_len,
+                tree,
+                val,
             })
         }
     }
@@ -134,36 +198,19 @@ mod helper {
             let hex_simple_nd = "a2616581a4616b5820636f6d2e6578616d706c652e7265636f72642f336a716663717a6d33666f326a6170006174f66176d82a582500017112209d156bc3f3a520066252c708a9361fd3d089223842500e3713d404fdccb33cef616cf6";
             let simple_nd_bytes = hex::decode(&hex_simple_nd).unwrap();
 
-            let tokens = minicbor::decode::Tokenizer::new(&simple_nd_bytes)
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
-            println!("{:?}", tokens);
-
             let ciborium_value: ciborium::value::Value =
                 ciborium::de::from_reader(&simple_nd_bytes[..]).unwrap();
-            println!("ciborium {:#?}", ciborium_value);
+            println!("ciborium {:?}", ciborium_value);
 
-            let simple_nd_value =
-                serde_cbor::from_slice::<serde_cbor::Value>(&simple_nd_bytes).unwrap();
-            println!("{:?}", simple_nd_value);
-            let simple_nd_bytes_2 = serde_cbor::to_vec(&simple_nd_value).unwrap();
-            let hex_simple_nd_2 = hex::encode(&simple_nd_bytes_2);
-            println!("{}", hex_simple_nd_2);
-            assert_eq!(simple_nd_bytes, simple_nd_bytes_2);
+            let simple_nd = NodeData::try_from(ciborium_value).unwrap();
+            println!("simple_nd {:?}", simple_nd);
 
-            let simple_nd_cbor = serde_cbor::from_slice::<CborNodeData>(&simple_nd_bytes).unwrap();
-            let simple_nd = NodeData::try_from(simple_nd_cbor).unwrap();
-            println!("{:?}", simple_nd);
+            let simple_nd_rt_value = Value::from(simple_nd.clone());
 
-            panic!();
+            let mut simple_nd_rt_bytes = Vec::new();
+            ciborium::ser::into_writer(&simple_nd_rt_value, &mut simple_nd_rt_bytes).unwrap();
+            assert_eq!(simple_nd_bytes, simple_nd_rt_bytes);
         }
-    }
-}
-
-impl TreeEntry {
-    pub fn read<R: io::Read>(reader: &mut R) -> io::Result<Self> {
-        // todo
-        todo!()
     }
 }
 
