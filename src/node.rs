@@ -13,12 +13,13 @@ pub struct TreeEntry {
 }
 
 #[derive(Clone, Debug, DagCbor)]
-struct NodeData {
+pub struct NodeData {
     #[ipld(rename = "l")]
     left: Option<Cid>,
     #[ipld(rename = "e")]
     entries: Vec<TreeEntry>,
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
