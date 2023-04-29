@@ -1,6 +1,6 @@
 use libipld::{Cid, DagCbor};
 
-#[derive(Clone, Debug, DagCbor)]
+#[derive(Clone, Debug, DagCbor, PartialEq, Eq)]
 pub struct TreeEntry {
     #[ipld(rename = "p")]
     prefix_len: u64,
@@ -12,7 +12,7 @@ pub struct TreeEntry {
     tree: Option<Cid>,
 }
 
-#[derive(Clone, Debug, DagCbor)]
+#[derive(Clone, Debug, DagCbor, PartialEq, Eq)]
 pub struct NodeData {
     #[ipld(rename = "l")]
     left: Option<Cid>,
